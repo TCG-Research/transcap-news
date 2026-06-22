@@ -501,8 +501,6 @@ body {
   <input class="search-input" id="search-input" type="text" placeholder="Buscar notícias…" oninput="filterSearch()" />
 </div>
 
-<div id="stale-banner" class="stale-banner" style="display:none;"></div>
-
 <main class="content" id="main-content">
   <div class="status-box">
     <div class="spinner"></div>
@@ -535,9 +533,12 @@ body {
    CONFIGURAÇÃO — edite aqui para personalizar
    ───────────────────────────────────────────────── */
 const CONFIG = {
+  digestEmail: 'pedrotineo19@gmail.com',
   autoRefreshMinutes: 30,
   historyDays: 5,
   maxAgeDays: 5,
+  appId: '1000013333',
+  appKey: '7cJytlQXdf_BAM9_FT1m0193F75Qqa_b',
   inoreaderFolder: 'TransCap',
   articlesPerLoad: 200,
 };
@@ -994,7 +995,7 @@ async function loadAllNews() {
   const total = getFilteredArticles().length;
   document.getElementById('last-update-subtitle').textContent = `${total} notícias no período · atualizado às ${fmtTime}`;
   document.getElementById('footer-status').textContent = `Histórico: ${allArticles.length} notícias · próxima atualização em ${CONFIG.autoRefreshMinutes} min`;
-  updateStalenessBanner();
+  // updateStalenessBanner(); — desativado a pedido do usuário (a UX já mostra hora da última atualização no subtítulo)
 }
 
 // Banner que avisa quando o news.json está parado há muito tempo (workflow travou)
@@ -1018,7 +1019,7 @@ function updateStalenessBanner() {
   }
 }
 // Atualiza o banner a cada minuto
-setInterval(updateStalenessBanner, 60000);
+// setInterval(updateStalenessBanner, 60000); — desativado a pedido do usuário
 
 function renderNews() {
   const container = document.getElementById('main-content');
@@ -1188,34 +1189,41 @@ function clearDigestAndRefresh() {
 function closeDigest() { document.getElementById('modal-overlay').classList.add('hidden'); }
 function closeDigestOnOverlay(e) { if (e.target === document.getElementById('modal-overlay')) closeDigest(); }
 
+// Ordem e labels específicos do digest (separado dos labels das abas)
+const DIGEST_SECTIONS = [
+  { id: 'rental',      emoji: '🚗', label: 'Rental' },
+  { id: 'airlines',    emoji: '✈️', label: 'Airlines' },
+  { id: 'concessions', emoji: '🚂', label: 'Concessions & Logistics' },
+  { id: 'capgoods',    emoji: '🏭', label: 'Capital Goods' },
+];
+
 function buildDigestText() {
-  const today = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
   const selected = allArticles.filter(a => digestSelection.has(a.id));
 
   let txt = `Itaú BBA | Transportation & Capital Goods\n`;
-  txt += `📰 Notícias — ${today}\n`;
-  txt += `${'─'.repeat(50)}\n\n`;
+  txt += `📰 Notícias\n`;
 
   if (selected.length === 0) {
-    txt += `Nenhuma notícia selecionada ainda.\n\nMarque a caixinha ao lado das notícias relevantes na lista para incluí-las no digest.`;
+    txt += `\nNenhuma notícia selecionada ainda.\n\nMarque a caixinha ao lado das notícias relevantes na lista para incluí-las no digest.`;
     return txt;
   }
 
-  for (const sector of SECTORS) {
-    const items = selected.filter(a => a.sectors.includes(sector.id));
+  // Dedup: cada notícia aparece só uma vez no PRIMEIRO setor (na ordem do DIGEST_SECTIONS)
+  const seenIds = new Set();
+  for (const section of DIGEST_SECTIONS) {
+    const items = selected.filter(a => {
+      if (!a.sectors.includes(section.id)) return false;
+      if (seenIds.has(a.id)) return false;
+      seenIds.add(a.id);
+      return true;
+    });
     if (items.length === 0) continue;
-    txt += `${sector.emoji} ${sector.name.toUpperCase()}\n\n`;
+    txt += `${section.emoji} ${section.label}\n`;
     for (const a of items) {
-      txt += `- ${a.title} (${a.sourceName})\n  ${a.link}\n\n`;
+      txt += `- ${a.title} (${a.link})\n`;
     }
   }
-  const others = selected.filter(a => a.sectors.length === 0);
-  if (others.length > 0) {
-    txt += `📊 OUTROS\n\n`;
-    for (const a of others) txt += `- ${a.title} (${a.sourceName})\n  ${a.link}\n\n`;
-  }
 
-  txt += `\nGerado automaticamente via TransCap News Dashboard`;
   return txt;
 }
 
@@ -1231,7 +1239,7 @@ function copyDigest() {
 function sendEmailDigest() {
   const subject = encodeURIComponent(`TransCap News — ${new Date().toLocaleDateString('pt-BR')}`);
   const body = encodeURIComponent(document.getElementById('digest-content').textContent);
-  window.open(`mailto:?subject=${subject}&body=${body}`, '_blank');
+  window.open(`mailto:${CONFIG.digestEmail}?subject=${subject}&body=${body}`, '_blank');
 }
 
 setInterval(loadAllNews, CONFIG.autoRefreshMinutes * 60 * 1000);
