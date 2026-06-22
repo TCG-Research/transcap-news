@@ -335,6 +335,17 @@ jobs:
           slim.sort(key=lambda x: x.get('published') or 0, reverse=True)
           print("::endgroup::")
 
+          # Carrega news.json existente (usado tanto pelo cache de URLs quanto pelo merge logic)
+          existing_items = []
+          existing_fetched_at = None
+          try:
+              with open('news.json', 'r', encoding='utf-8') as f:
+                  existing = json.load(f)
+                  existing_items = existing.get('items', [])
+                  existing_fetched_at = existing.get('_fetched_at')
+          except Exception:
+              pass
+
           # 3.5) Resolve Google News URLs to publisher URLs (com cache do news.json anterior)
           print("::group::Resolving Google News URLs")
 
@@ -414,17 +425,6 @@ jobs:
           print(f"Replaced {replaced} Google News URLs with publisher URLs")
           debug_info['gnews_resolved'] = replaced
           debug_info['gnews_to_resolve'] = len(to_resolve)
-
-          # Carrega news.json existente pra preservar items se essa execução falhou
-          existing_items = []
-          existing_fetched_at = None
-          try:
-              with open('news.json', 'r', encoding='utf-8') as f:
-                  existing = json.load(f)
-                  existing_items = existing.get('items', [])
-                  existing_fetched_at = existing.get('_fetched_at')
-          except Exception:
-              pass
 
           # Estratégia de merge SEMPRE — preserva histórico:
           # - 0 items pegos: preserva os anteriores (falha no fetch)
