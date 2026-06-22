@@ -31,6 +31,9 @@ jobs:
   fetch:
     runs-on: ubuntu-latest
     steps:
+      - name: Install googlenewsdecoder
+        run: pip install --quiet googlenewsdecoder
+
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
@@ -58,6 +61,12 @@ jobs:
           import os, json, time, urllib.parse, urllib.request, urllib.error, datetime, sys, traceback, re
           from concurrent.futures import ThreadPoolExecutor, as_completed
           from html import unescape
+          try:
+              from googlenewsdecoder import gnewsdecoder
+              GNEWS_DECODER_AVAILABLE = True
+          except ImportError:
+              GNEWS_DECODER_AVAILABLE = False
+              print("::warning::googlenewsdecoder not installed — URLs Google News não serão resolvidas")
 
           APP_ID = os.environ['INO_APP_ID']
           APP_KEY = os.environ['INO_APP_KEY']
@@ -355,31 +364,19 @@ jobs:
               return c if 'news.google.com' in c else None
 
           def resolve_gnews_url(gnews_url):
-              """Resolve URL Google News pra publisher real. Retorna URL original em caso de falha."""
+              """Resolve URL Google News pra publisher real usando googlenewsdecoder.
+              Retorna URL original em caso de falha."""
+              if not GNEWS_DECODER_AVAILABLE:
+                  return gnews_url
               try:
-                  req = urllib.request.Request(gnews_url, headers={
-                      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                      'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
-                  })
-                  with urllib.request.urlopen(req, timeout=10) as r:
-                      final_url = r.geturl()
-                      if 'news.google.com' not in final_url:
-                          return final_url
-                      # Ainda no Google News — busca link no HTML (data-n-au ou meta refresh)
-                      content = r.read(100000).decode('utf-8', errors='replace')
-                      m = re.search(r'data-n-au="([^"]+)"', content)
-                      if m:
-                          return unescape(m.group(1))
-                      m = re.search(r'<meta[^>]+http-equiv=["\']refresh["\'][^>]+url=([^"\'\s>]+)', content, re.IGNORECASE)
-                      if m:
-                          return unescape(m.group(1))
-                      # Procura primeira <a href="http..."> não-google
-                      for am in re.finditer(r'<a[^>]+href="(https?://[^"]+)"', content):
-                          url_cand = am.group(1)
-                          if 'google.com' not in url_cand and 'gstatic.com' not in url_cand:
-                              return unescape(url_cand)
+                  result = gnewsdecoder(gnews_url, interval=1)
+                  if result.get('status') and result.get('decoded_url'):
+                      return result['decoded_url']
+                  err = result.get('message', 'no decoded_url')
+                  # Log apenas o que importa, não o URL inteiro
+                  print(f"  resolve fail (no decode): {err[:60]}")
               except Exception as e:
-                  print(f"  resolve fail ({type(e).__name__}): {gnews_url[:80]}")
+                  print(f"  resolve fail ({type(e).__name__}): {str(e)[:60]}")
               return gnews_url  # Fallback
 
           # Cache: id → resolved_link já presente no news.json anterior
