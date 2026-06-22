@@ -55,7 +55,9 @@ jobs:
           DISPATCH_PAGES: ${{ inputs.pages }}
         run: |
           python3 <<'PY'
-          import os, json, time, urllib.parse, urllib.request, urllib.error, datetime, sys, traceback
+          import os, json, time, urllib.parse, urllib.request, urllib.error, datetime, sys, traceback, re
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          from html import unescape
 
           APP_ID = os.environ['INO_APP_ID']
           APP_KEY = os.environ['INO_APP_KEY']
@@ -331,6 +333,87 @@ jobs:
               })
 
           slim.sort(key=lambda x: x.get('published') or 0, reverse=True)
+          print("::endgroup::")
+
+          # 3.5) Resolve Google News URLs to publisher URLs (com cache do news.json anterior)
+          print("::group::Resolving Google News URLs")
+
+          def get_gnews_link(item):
+              """Retorna a href atual se for Google News, senão None."""
+              c = (item.get('canonical') or [{}])[0].get('href') or ''
+              return c if 'news.google.com' in c else None
+
+          def resolve_gnews_url(gnews_url):
+              """Resolve URL Google News pra publisher real. Retorna URL original em caso de falha."""
+              try:
+                  req = urllib.request.Request(gnews_url, headers={
+                      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                      'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
+                  })
+                  with urllib.request.urlopen(req, timeout=10) as r:
+                      final_url = r.geturl()
+                      if 'news.google.com' not in final_url:
+                          return final_url
+                      # Ainda no Google News — busca link no HTML (data-n-au ou meta refresh)
+                      content = r.read(100000).decode('utf-8', errors='replace')
+                      m = re.search(r'data-n-au="([^"]+)"', content)
+                      if m:
+                          return unescape(m.group(1))
+                      m = re.search(r'<meta[^>]+http-equiv=["\']refresh["\'][^>]+url=([^"\'\s>]+)', content, re.IGNORECASE)
+                      if m:
+                          return unescape(m.group(1))
+                      # Procura primeira <a href="http..."> não-google
+                      for am in re.finditer(r'<a[^>]+href="(https?://[^"]+)"', content):
+                          url_cand = am.group(1)
+                          if 'google.com' not in url_cand and 'gstatic.com' not in url_cand:
+                              return unescape(url_cand)
+              except Exception as e:
+                  print(f"  resolve fail ({type(e).__name__}): {gnews_url[:80]}")
+              return gnews_url  # Fallback
+
+          # Cache: id → resolved_link já presente no news.json anterior
+          resolved_cache = {}
+          for it in existing_items:
+              link = (it.get('canonical') or [{}])[0].get('href') or ''
+              if link and 'news.google.com' not in link:
+                  # Já foi resolvido em run anterior — guarda
+                  resolved_cache[it.get('id')] = link
+
+          # Coleta IDs que precisam resolver (Google News e ainda não no cache)
+          to_resolve = []
+          for it in slim:
+              gnews = get_gnews_link(it)
+              if gnews and it.get('id') not in resolved_cache:
+                  to_resolve.append((it.get('id'), gnews))
+
+          print(f"Cache hits: {sum(1 for it in slim if get_gnews_link(it) and it.get('id') in resolved_cache)}")
+          print(f"To resolve: {len(to_resolve)}")
+
+          if to_resolve:
+              t0 = time.time()
+              with ThreadPoolExecutor(max_workers=10) as pool:
+                  futures = {pool.submit(resolve_gnews_url, url): item_id for item_id, url in to_resolve}
+                  for fut in as_completed(futures):
+                      item_id = futures[fut]
+                      try:
+                          resolved_cache[item_id] = fut.result()
+                      except Exception as e:
+                          print(f"  exception for {item_id}: {e}")
+              print(f"Resolved {len(to_resolve)} URLs in {time.time()-t0:.1f}s")
+
+          # Aplica as URLs resolvidas nos slim items
+          replaced = 0
+          for it in slim:
+              gnews = get_gnews_link(it)
+              if gnews and resolved_cache.get(it.get('id')):
+                  new_link = resolved_cache[it.get('id')]
+                  if new_link != gnews:
+                      it['canonical'] = [{'href': new_link}]
+                      it['_original_gnews_url'] = gnews  # guarda original pra debug
+                      replaced += 1
+          print(f"Replaced {replaced} Google News URLs with publisher URLs")
+          debug_info['gnews_resolved'] = replaced
+          debug_info['gnews_to_resolve'] = len(to_resolve)
 
           # Carrega news.json existente pra preservar items se essa execução falhou
           existing_items = []
