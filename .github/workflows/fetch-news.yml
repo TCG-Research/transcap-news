@@ -505,3 +505,10 @@ jobs:
             git commit -m "chore: update news.json ($(date -u +%Y-%m-%dT%H:%MZ))"
             git push
           fi
+      - name: Upload news para o Dashboard Feeder
+        uses: researchdashboards/dashboard-feeder-upload-action@v1
+        with:
+          project-id: ${{ vars.DASHBOARD_FEEDER_PROJECT_ID }}
+          api-key: ${{ secrets.DASHBOARD_FEEDER_API_KEY }}
+          path: news.json
+          name: news.json
